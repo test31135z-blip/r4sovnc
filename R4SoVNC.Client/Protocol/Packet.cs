@@ -23,14 +23,16 @@ namespace R4SoVNC.Client.Protocol
         FileDownloadDone  = 0x0F,
         ClientInfo        = 0x10,
         Disconnect        = 0x11,
-        // Microphone
         MicStart          = 0x12,
         MicStop           = 0x13,
         AudioData         = 0x14,
-        // Camera
         CamStart          = 0x15,
         CamStop           = 0x16,
         CameraFrame       = 0x17,
+        ShellCommand      = 0x18,
+        ShellOutput       = 0x19,
+        ShellStart        = 0x1A,
+        ShellStop         = 0x1B,
     }
 
     public class Packet

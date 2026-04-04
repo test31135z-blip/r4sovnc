@@ -11,10 +11,11 @@ namespace R4SoVNC.Server.Forms
         private PictureBox pictureBox;
         private Panel pnlToolbar;
         private Button btnToggleControl;
-        private Button btnFileManager;
-        private Button btnFullscreen;
         private Button btnMic;
         private Button btnCamera;
+        private Button btnShell;
+        private Button btnFileManager;
+        private Button btnFullscreen;
         private Label lblControlStatus;
         private Label lblResolution;
 
@@ -32,35 +33,47 @@ namespace R4SoVNC.Server.Forms
             this.ForeColor = Theme.Text;
             this.StartPosition = FormStartPosition.CenterScreen;
 
-            // Toolbar
             pnlToolbar = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 50,
+                Height = 52,
                 BackColor = Theme.PanelDark
             };
 
             int bx = 10;
 
-            btnToggleControl = MakeToolBtn("🟢 Start Control", bx, Theme.AccentDark);
+            btnToggleControl = MakeBtn("🟢 Start Control", ref bx, Theme.AccentDark, 140);
             btnToggleControl.Click += btnToggleControl_Click;
-            bx += btnToggleControl.Width + 6;
 
-            btnMic = MakeToolBtn("🎤 Mic", bx, Theme.SurfaceLight);
+            btnMic = MakeBtn("🎤 Mic", ref bx, Theme.SurfaceLight, 90);
             btnMic.Click += btnMic_Click;
-            bx += btnMic.Width + 6;
 
-            btnCamera = MakeToolBtn("📷 Camera", bx, Theme.SurfaceLight);
+            btnCamera = MakeBtn("📷 Camera", ref bx, Theme.SurfaceLight, 100);
             btnCamera.Click += btnCamera_Click;
-            bx += btnCamera.Width + 6;
 
-            btnFileManager = MakeToolBtn("📁 Files", bx, Theme.SurfaceLight);
+            btnShell = MakeBtn("⌨ Shell", ref bx, Theme.SurfaceLight, 90);
+            btnShell.Click += btnShell_Click;
+
+            btnFileManager = MakeBtn("📁 Files", ref bx, Theme.SurfaceLight, 90);
             btnFileManager.Click += btnFileManager_Click;
-            bx += btnFileManager.Width + 6;
 
-            btnFullscreen = MakeToolBtn("⛶ Fullscreen", bx, Theme.SurfaceLight);
+            // Separator
+            bx += 6;
+            var sep = new Label
+            {
+                Text = "|",
+                ForeColor = Theme.Border,
+                Font = new Font("Segoe UI", 14f),
+                AutoSize = true,
+                Location = new Point(bx, 15)
+            };
+            pnlToolbar.Controls.Add(sep);
+            bx += 18;
+
+            btnFullscreen = MakeBtn("⛶ Fullscreen", ref bx, Theme.SurfaceLight, 110);
             btnFullscreen.Click += btnFullscreen_Click;
-            bx += btnFullscreen.Width + 16;
+
+            bx += 14;
 
             lblControlStatus = new Label
             {
@@ -68,25 +81,24 @@ namespace R4SoVNC.Server.Forms
                 ForeColor = Theme.Success,
                 Font = new Font("Segoe UI", 9f, System.Drawing.FontStyle.Bold),
                 AutoSize = true,
-                Location = new Point(bx, 17)
+                Location = new Point(bx, 18)
             };
 
             lblResolution = new Label
             {
-                Text = "?×?",
+                Text = "",
                 ForeColor = Theme.TextMuted,
                 Font = Theme.FontSmall,
                 AutoSize = true,
-                Location = new Point(bx + 140, 18)
+                Location = new Point(bx + 135, 20)
             };
 
             pnlToolbar.Controls.AddRange(new Control[] {
-                btnToggleControl, btnMic, btnCamera, btnFileManager, btnFullscreen,
-                lblControlStatus, lblResolution
+                btnToggleControl, btnMic, btnCamera, btnShell, btnFileManager,
+                btnFullscreen, lblControlStatus, lblResolution
             });
             this.Controls.Add(pnlToolbar);
 
-            // Screen view
             pictureBox = new PictureBox
             {
                 Dock = DockStyle.Fill,
@@ -96,17 +108,18 @@ namespace R4SoVNC.Server.Forms
             this.Controls.Add(pictureBox);
         }
 
-        private Button MakeToolBtn(string text, int x, Color bg)
+        private Button MakeBtn(string text, ref int x, Color bg, int width = 110)
         {
             var btn = new Button
             {
                 Text = text,
-                Size = new Size(120, 34),
+                Size = new Size(width, 36),
                 Location = new Point(x, 8),
                 BackColor = bg
             };
             Theme.ApplyButton(btn, false);
             btn.BackColor = bg;
+            x += width + 5;
             return btn;
         }
     }

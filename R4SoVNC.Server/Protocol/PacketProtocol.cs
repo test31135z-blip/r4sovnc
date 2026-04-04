@@ -23,14 +23,17 @@ namespace R4SoVNC.Server.Protocol
         FileDownloadDone  = 0x0F,
         ClientInfo        = 0x10,
         Disconnect        = 0x11,
-        // Microphone
         MicStart          = 0x12,
         MicStop           = 0x13,
         AudioData         = 0x14,
-        // Camera
         CamStart          = 0x15,
         CamStop           = 0x16,
         CameraFrame       = 0x17,
+        // Shell / CMD
+        ShellCommand      = 0x18,
+        ShellOutput       = 0x19,
+        ShellStart        = 0x1A,
+        ShellStop         = 0x1B,
     }
 
     public class Packet
@@ -107,8 +110,8 @@ namespace R4SoVNC.Server.Protocol
             return new Packet(down ? PacketType.KeyDown : PacketType.KeyUp, ms.ToArray());
         }
 
-        public static Packet FileListRequest(string path) => new Packet(PacketType.FileListRequest, path);
-        public static Packet FileDownloadRequest(string remotePath) => new Packet(PacketType.FileDownloadReq, remotePath);
+        public static Packet FileListRequest(string path)  => new Packet(PacketType.FileListRequest, path);
+        public static Packet FileDownloadRequest(string p) => new Packet(PacketType.FileDownloadReq, p);
 
         public static Packet FileUploadRequest(string fileName, long fileSize)
         {
@@ -118,9 +121,13 @@ namespace R4SoVNC.Server.Protocol
             return new Packet(PacketType.FileUploadRequest, ms.ToArray());
         }
 
-        public static Packet MicStart() => new Packet(PacketType.MicStart);
-        public static Packet MicStop()  => new Packet(PacketType.MicStop);
-        public static Packet CamStart() => new Packet(PacketType.CamStart);
-        public static Packet CamStop()  => new Packet(PacketType.CamStop);
+        public static Packet MicStart()  => new Packet(PacketType.MicStart);
+        public static Packet MicStop()   => new Packet(PacketType.MicStop);
+        public static Packet CamStart()  => new Packet(PacketType.CamStart);
+        public static Packet CamStop()   => new Packet(PacketType.CamStop);
+
+        public static Packet ShellStart()               => new Packet(PacketType.ShellStart);
+        public static Packet ShellStop()                => new Packet(PacketType.ShellStop);
+        public static Packet ShellCommand(string cmd)   => new Packet(PacketType.ShellCommand, cmd);
     }
 }
