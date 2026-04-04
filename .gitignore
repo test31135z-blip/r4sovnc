@@ -1,0 +1,28 @@
+## .NET / Visual Studio
+bin/
+obj/
+*.user
+*.suo
+*.vs/
+.vs/
+*.DotSettings.user
+TestResults/
+Builds/
+publish/
+*.log
+*.cache
+*.ncrunchsolution
+*.ncrunchproject
+
+## NuGet
+packages/
+*.nupkg
+project.lock.json
+
+## Generated
+config.gen.txt
+
+## OS
+.DS_Store
+Thumbs.db
+desktop.ini
