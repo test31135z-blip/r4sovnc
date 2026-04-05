@@ -10,21 +10,29 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
-  <!-- Client source files live here but must NOT be compiled into the server -->
+  <ItemGroup>
+    <!-- Server runtime deps -->
+    <PackageReference Include="Newtonsoft.Json"  Version="13.0.3" />
+    <PackageReference Include="NAudio"            Version="2.2.1"  />
+
+    <!-- Client deps — bundled into server output so Roslyn can reference them -->
+    <PackageReference Include="AForge.Video"             Version="2.2.5" />
+    <PackageReference Include="AForge.Video.DirectShow"  Version="2.2.5" />
+
+    <!-- In-process C# compiler — no .NET SDK required on end-user machine -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+  </ItemGroup>
+
+  <!-- ClientSource .cs files live here but are NOT compiled into the server -->
   <ItemGroup>
     <Compile Remove="ClientSource\**" />
   </ItemGroup>
 
-  <!-- Copy all ClientSource .cs files to the output directory so the builder can use them -->
+  <!-- Copy ClientSource to the output directory so ClientCompiler can find them -->
   <ItemGroup>
     <None Include="ClientSource\**\*.cs">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>ClientSource\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="NAudio"          Version="2.2.1" />
   </ItemGroup>
 </Project>

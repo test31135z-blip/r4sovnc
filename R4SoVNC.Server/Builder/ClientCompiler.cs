@@ -1,32 +1,31 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Emit;
 
 namespace R4SoVNC.Server.Builder
 {
     /// <summary>
-    /// Compiles the embedded client source files into a standalone EXE
-    /// by generating a temporary .csproj and running "dotnet publish".
-    /// HOST and PORT are baked in at compile time via ClientConfig.cs.
+    /// Compiles the embedded client source files into a standalone .exe
+    /// using the Roslyn C# compiler bundled as a NuGet package.
+    /// No .NET SDK or Visual Studio required on the build machine.
     /// </summary>
     public static class ClientCompiler
     {
-        private static readonly string SourceDir = Path.Combine(
-            Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!,
-            "ClientSource");
+        // Apphost placeholder — .NET SDK patches this to the assembly name
+        private const string AppHostPlaceholder = "c3ab8ff13720e8ad9047dd39466b3c8974e592c2db15579a8b498bbf8b24dc9";
 
-        // NuGet package references the client needs
-        private static readonly string[] PackageRefs =
-        {
-            "<PackageReference Include=\"NAudio\"                   Version=\"2.2.1\" />",
-            "<PackageReference Include=\"AForge.Video\"             Version=\"2.2.5\" />",
-            "<PackageReference Include=\"AForge.Video.DirectShow\"  Version=\"2.2.5\" />",
-            "<PackageReference Include=\"Newtonsoft.Json\"          Version=\"13.0.3\" />",
-        };
+        private static readonly string ServerDir =
+            Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+
+        private static readonly string ClientSourceDir =
+            Path.Combine(ServerDir, "ClientSource");
 
         public class CompileResult
         {
@@ -35,93 +34,83 @@ namespace R4SoVNC.Server.Builder
             public string ErrorMessage { get; init; } = "";
         }
 
-        /// <summary>
-        /// Builds the client with the given host/port baked in.
-        /// Reports progress via <paramref name="progress"/>.
-        /// Returns path to the output .exe on success.
-        /// </summary>
         public static CompileResult Compile(string host, int port,
             string outputDir, Action<string> progress,
             CancellationToken cancel = default)
         {
-            // ── 1. Locate ClientSource directory ─────────────────────────────
-            string srcDir = SourceDir;
-
-            // When running from the project root (e.g. VS debug), look next to the .sln
-            if (!Directory.Exists(srcDir))
-            {
-                // Walk up from executable to find the repo
-                string? dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                while (dir != null && !File.Exists(Path.Combine(dir, "r4sovnc.sln")))
-                    dir = Path.GetDirectoryName(dir);
-                if (dir != null)
-                    srcDir = Path.Combine(dir, "R4SoVNC.Server", "ClientSource");
-            }
-
-            if (!Directory.Exists(srcDir))
-                return Fail("ClientSource directory not found next to the server executable.");
-
-            progress("Preparing build workspace...");
-
-            // ── 2. Create temp directory ──────────────────────────────────────
-            string tmpDir = Path.Combine(Path.GetTempPath(), $"r4sovnc_build_{Guid.NewGuid():N}");
-            Directory.CreateDirectory(tmpDir);
-
             try
             {
-                // ── 3. Copy all .cs source files ──────────────────────────────
-                progress("Copying source files...");
-                CopySourceFiles(srcDir, tmpDir);
+                // ── 1. Verify ClientSource is present ─────────────────────────
+                if (!Directory.Exists(ClientSourceDir))
+                    return Fail($"ClientSource directory not found:\n{ClientSourceDir}");
 
-                // ── 4. Overwrite ClientConfig.cs with baked-in HOST & PORT ────
-                string configPath = Path.Combine(tmpDir, "ClientConfig.cs");
-                File.WriteAllText(configPath,
-                    "namespace R4SoVNC.ClientEmbed\n" +
-                    "{\n" +
-                    "    internal static class ClientConfig\n" +
-                    "    {\n" +
-                    $"        public const string HOST = \"{EscapeString(host)}\";\n" +
-                    $"        public const int    PORT = {port};\n" +
-                    "    }\n" +
-                    "}\n",
-                    Encoding.UTF8);
+                progress("Reading client source files...");
+                var syntaxTrees = BuildSyntaxTrees(host, port, cancel);
+                if (syntaxTrees.Count == 0)
+                    return Fail("No .cs files found in ClientSource.");
 
-                // ── 5. Write the .csproj ──────────────────────────────────────
-                progress("Generating project file...");
-                string csproj = GenerateCsproj();
-                File.WriteAllText(Path.Combine(tmpDir, "R4SoVNC.Client.csproj"), csproj, Encoding.UTF8);
+                // ── 2. Collect reference assemblies ───────────────────────────
+                progress("Resolving references...");
+                var refs = CollectReferences(progress);
+                if (refs.Count == 0)
+                    return Fail("Could not locate .NET runtime reference assemblies.");
 
-                // ── 6. Run "dotnet publish" ───────────────────────────────────
-                progress("Running dotnet publish (this may take a minute)...");
-                string publishDir = Path.Combine(tmpDir, "publish");
-                string args = $"publish \"{Path.Combine(tmpDir, "R4SoVNC.Client.csproj")}\" " +
-                              $"-c Release " +
-                              $"-r win-x64 " +
-                              $"--self-contained true " +
-                              $"-p:PublishSingleFile=true " +
-                              $"-p:EnableCompressionInSingleFile=true " +
-                              $"-p:IncludeAllContentForSelfExtract=true " +
-                              $"-o \"{publishDir}\" " +
-                              $"--nologo -v minimal";
+                // ── 3. Roslyn compile ─────────────────────────────────────────
+                progress("Compiling with Roslyn (no SDK required)...");
+                cancel.ThrowIfCancellationRequested();
 
-                var (exitCode, output) = RunProcess("dotnet", args, cancel);
+                string dllName = "R4SoVNC.Client";
+                var compilation = CSharpCompilation.Create(
+                    assemblyName: dllName,
+                    syntaxTrees:  syntaxTrees,
+                    references:   refs,
+                    options: new CSharpCompilationOptions(
+                        outputKind:            OutputKind.ConsoleApplication,
+                        optimizationLevel:     OptimizationLevel.Release,
+                        platform:              Platform.AnyCpu,
+                        allowUnsafe:           true,
+                        nullableContextOptions: NullableContextOptions.Enable));
 
-                if (exitCode != 0)
-                    return Fail($"dotnet publish failed (exit {exitCode}):\n{output}");
-
-                // ── 7. Find the built exe ────────────────────────────────────
-                string exeSrc = Path.Combine(publishDir, "R4SoVNC.Client.exe");
-                if (!File.Exists(exeSrc))
-                    return Fail("Publish succeeded but EXE not found.\n" + output);
-
-                // ── 8. Copy to user-chosen output dir ─────────────────────────
-                progress("Copying output...");
                 Directory.CreateDirectory(outputDir);
-                string exeDst = Path.Combine(outputDir, "R4SoVNC.Client.exe");
-                File.Copy(exeSrc, exeDst, overwrite: true);
+                string dllPath = Path.Combine(outputDir, dllName + ".dll");
+                string pdbPath = Path.Combine(outputDir, dllName + ".pdb");
+
+                EmitResult emitResult = compilation.Emit(dllPath, pdbPath);
+
+                if (!emitResult.Success)
+                {
+                    var errors = emitResult.Diagnostics
+                        .Where(d => d.Severity == DiagnosticSeverity.Error)
+                        .Select(d => d.ToString());
+                    return Fail("Compilation errors:\n" + string.Join("\n", errors));
+                }
+
+                // ── 4. Copy dependency DLLs ───────────────────────────────────
+                progress("Copying dependencies...");
+                CopyDependencies(outputDir);
+
+                // ── 5. Write runtimeconfig.json ───────────────────────────────
+                progress("Writing runtime config...");
+                WriteRuntimeConfig(outputDir, dllName);
+
+                // ── 6. Find & patch apphost to make a .exe ────────────────────
+                progress("Creating launcher executable...");
+                string exePath = Path.Combine(outputDir, dllName + ".exe");
+                bool   gotExe  = TryCreateAppHost(dllName, exePath);
+
+                if (!gotExe)
+                {
+                    // Fallback: write a .bat launcher
+                    File.WriteAllText(
+                        Path.Combine(outputDir, dllName + ".bat"),
+                        $"@echo off\r\ndotnet \"%~dp0{dllName}.dll\"\r\n");
+
+                    exePath = dllPath; // point to dll
+                    progress("Note: apphost not found — created .bat launcher instead.");
+                }
 
                 progress("Done!");
-                return new CompileResult { Success = true, ExePath = exeDst };
+                return new CompileResult { Success = true, ExePath = exePath };
             }
             catch (OperationCanceledException)
             {
@@ -131,76 +120,222 @@ namespace R4SoVNC.Server.Builder
             {
                 return Fail(ex.ToString());
             }
-            finally
-            {
-                // Clean up temp dir
-                try { Directory.Delete(tmpDir, true); } catch { }
-            }
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────────
+        // ── Syntax trees ───────────────────────────────────────────────────────
 
-        private static void CopySourceFiles(string srcDir, string dstDir)
+        private static List<SyntaxTree> BuildSyntaxTrees(string host, int port, CancellationToken cancel)
         {
-            foreach (string file in Directory.GetFiles(srcDir, "*.cs", SearchOption.AllDirectories))
+            var trees = new List<SyntaxTree>();
+            foreach (string file in Directory.GetFiles(ClientSourceDir, "*.cs", SearchOption.AllDirectories))
             {
-                string rel = Path.GetRelativePath(srcDir, file);
-                string dst = Path.Combine(dstDir, rel);
-                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-                File.Copy(file, dst, overwrite: true);
-            }
-        }
+                cancel.ThrowIfCancellationRequested();
+                string src = File.ReadAllText(file, Encoding.UTF8);
 
-        private static string GenerateCsproj()
-        {
-            var sb = new StringBuilder();
-            sb.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");
-            sb.AppendLine("  <PropertyGroup>");
-            sb.AppendLine("    <OutputType>Exe</OutputType>");
-            sb.AppendLine("    <TargetFramework>net8.0-windows</TargetFramework>");
-            sb.AppendLine("    <AssemblyName>R4SoVNC.Client</AssemblyName>");
-            sb.AppendLine("    <RootNamespace>R4SoVNC.ClientEmbed</RootNamespace>");
-            sb.AppendLine("    <Nullable>enable</Nullable>");
-            sb.AppendLine("    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>");
-            sb.AppendLine("    <UseWindowsForms>true</UseWindowsForms>");
-            sb.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
-            sb.AppendLine("  </PropertyGroup>");
-            sb.AppendLine("  <ItemGroup>");
-            foreach (string pkg in PackageRefs)
-                sb.AppendLine("    " + pkg);
-            sb.AppendLine("  </ItemGroup>");
-            sb.AppendLine("</Project>");
-            return sb.ToString();
-        }
-
-        private static (int exitCode, string output) RunProcess(
-            string exe, string args, CancellationToken cancel)
-        {
-            var psi = new ProcessStartInfo(exe, args)
-            {
-                UseShellExecute        = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                CreateNoWindow         = true,
-            };
-            using var proc = new Process { StartInfo = psi };
-            var outBuf = new StringBuilder();
-            proc.OutputDataReceived += (_, e) => { if (e.Data != null) outBuf.AppendLine(e.Data); };
-            proc.ErrorDataReceived  += (_, e) => { if (e.Data != null) outBuf.AppendLine(e.Data); };
-            proc.Start();
-            proc.BeginOutputReadLine();
-            proc.BeginErrorReadLine();
-
-            while (!proc.WaitForExit(300))
-            {
-                if (cancel.IsCancellationRequested)
+                // Patch ClientConfig.cs with real HOST and PORT
+                if (Path.GetFileName(file).Equals("ClientConfig.cs", StringComparison.OrdinalIgnoreCase))
                 {
-                    proc.Kill(entireProcessTree: true);
-                    throw new OperationCanceledException();
+                    src = "namespace R4SoVNC.ClientEmbed\n{\n" +
+                          "    internal static class ClientConfig\n    {\n" +
+                          $"        public const string HOST = \"{EscapeString(host)}\";\n" +
+                          $"        public const int    PORT = {port};\n" +
+                          "    }\n}\n";
+                }
+
+                trees.Add(CSharpSyntaxTree.ParseText(src, path: file));
+            }
+            return trees;
+        }
+
+        // ── Reference assembly discovery ───────────────────────────────────────
+
+        private static List<MetadataReference> CollectReferences(Action<string> progress)
+        {
+            var refs = new List<MetadataReference>();
+
+            // a) .NET 8 shared framework DLLs (runtime, no SDK needed)
+            string[] runtimeRoots =
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                             @"dotnet\shared\Microsoft.NETCore.App"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                             @"dotnet\shared\Microsoft.NETCore.App"),
+                @"C:\Program Files\dotnet\shared\Microsoft.NETCore.App",
+            };
+
+            string[] desktopRoots =
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                             @"dotnet\shared\Microsoft.WindowsDesktop.App"),
+                @"C:\Program Files\dotnet\shared\Microsoft.WindowsDesktop.App",
+            };
+
+            AddFrameworkRefs(refs, runtimeRoots,  "8.", progress);
+            AddFrameworkRefs(refs, desktopRoots,  "8.", progress);
+
+            // b) Dependency DLLs from the server's own output directory
+            string[] clientDeps = { "NAudio.dll", "Newtonsoft.Json.dll",
+                                     "AForge.dll", "AForge.Video.dll",
+                                     "AForge.Video.DirectShow.dll",
+                                     "AForge.Math.dll" };
+            foreach (string dep in clientDeps)
+            {
+                string p = Path.Combine(ServerDir, dep);
+                if (File.Exists(p))
+                    refs.Add(MetadataReference.CreateFromFile(p));
+            }
+
+            // c) The currently-loaded mscorlib / System.Runtime as fallback
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.IsDynamic || string.IsNullOrEmpty(asm.Location)) continue;
+                try { refs.Add(MetadataReference.CreateFromFile(asm.Location)); } catch { }
+            }
+
+            return refs;
+        }
+
+        private static void AddFrameworkRefs(List<MetadataReference> refs,
+            string[] roots, string versionPrefix, Action<string> progress)
+        {
+            foreach (string root in roots)
+            {
+                if (!Directory.Exists(root)) continue;
+                var versions = Directory.GetDirectories(root)
+                    .Where(d => Path.GetFileName(d).StartsWith(versionPrefix))
+                    .OrderByDescending(d => d)
+                    .ToArray();
+
+                if (versions.Length == 0) continue;
+                string latest = versions[0];
+                progress($"Found runtime: {Path.GetFileName(latest)}");
+
+                foreach (string dll in Directory.GetFiles(latest, "*.dll"))
+                {
+                    try { refs.Add(MetadataReference.CreateFromFile(dll)); } catch { }
+                }
+                return; // use first (latest) found root
+            }
+        }
+
+        // ── Dependency DLL copy ───────────────────────────────────────────────
+
+        private static void CopyDependencies(string outputDir)
+        {
+            string[] deps = {
+                "NAudio.dll", "NAudio.Core.dll", "NAudio.WinForms.dll",
+                "NAudio.WinMM.dll", "NAudio.Asio.dll", "NAudio.Wasapi.dll",
+                "Newtonsoft.Json.dll",
+                "AForge.dll", "AForge.Math.dll",
+                "AForge.Video.dll", "AForge.Video.DirectShow.dll",
+            };
+            foreach (string dep in deps)
+            {
+                string src = Path.Combine(ServerDir, dep);
+                string dst = Path.Combine(outputDir, dep);
+                if (File.Exists(src) && src != dst)
+                    File.Copy(src, dst, overwrite: true);
+            }
+        }
+
+        // ── runtimeconfig.json ────────────────────────────────────────────────
+
+        private static void WriteRuntimeConfig(string outputDir, string dllName)
+        {
+            string json =
+                "{\n" +
+                "  \"runtimeOptions\": {\n" +
+                "    \"tfm\": \"net8.0\",\n" +
+                "    \"frameworks\": [\n" +
+                "      { \"name\": \"Microsoft.NETCore.App\",        \"version\": \"8.0.0\" },\n" +
+                "      { \"name\": \"Microsoft.WindowsDesktop.App\", \"version\": \"8.0.0\" }\n" +
+                "    ]\n" +
+                "  }\n" +
+                "}\n";
+            File.WriteAllText(Path.Combine(outputDir, dllName + ".runtimeconfig.json"), json, Encoding.UTF8);
+        }
+
+        // ── Apphost creation ──────────────────────────────────────────────────
+
+        private static bool TryCreateAppHost(string assemblyName, string exeOutputPath)
+        {
+            string? template = FindAppHostTemplate();
+            if (template == null) return false;
+
+            try
+            {
+                byte[] exe   = File.ReadAllBytes(template);
+                byte[] find  = Encoding.UTF8.GetBytes(AppHostPlaceholder);
+                byte[] replace = new byte[find.Length]; // zero-padded
+                byte[] nameBytes = Encoding.UTF8.GetBytes(assemblyName + ".dll");
+                Array.Copy(nameBytes, replace, Math.Min(nameBytes.Length, replace.Length));
+
+                int idx = IndexOf(exe, find);
+                if (idx < 0) return false;
+
+                Array.Copy(replace, 0, exe, idx, replace.Length);
+                File.WriteAllBytes(exeOutputPath, exe);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        private static string? FindAppHostTemplate()
+        {
+            // SDK locations (if SDK is installed)
+            var sdkRoots = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                             @"dotnet\sdk"),
+                @"C:\Program Files\dotnet\sdk",
+            };
+            foreach (string root in sdkRoots)
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (string ver in Directory.GetDirectories(root)
+                             .Where(d => Path.GetFileName(d).StartsWith("8."))
+                             .OrderByDescending(d => d))
+                {
+                    string p = Path.Combine(ver, "AppHostTemplate", "apphost.exe");
+                    if (File.Exists(p)) return p;
                 }
             }
-            return (proc.ExitCode, outBuf.ToString());
+
+            // NuGet packs location (installed with runtime packs)
+            var packRoots = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                             @"dotnet\packs\Microsoft.NETCore.App.Host.win-x64"),
+                @"C:\Program Files\dotnet\packs\Microsoft.NETCore.App.Host.win-x64",
+            };
+            foreach (string root in packRoots)
+            {
+                if (!Directory.Exists(root)) continue;
+                foreach (string ver in Directory.GetDirectories(root)
+                             .Where(d => Path.GetFileName(d).StartsWith("8."))
+                             .OrderByDescending(d => d))
+                {
+                    string p = Path.Combine(ver, "runtimes", "win-x64", "native", "apphost.exe");
+                    if (File.Exists(p)) return p;
+                }
+            }
+
+            return null;
         }
+
+        private static int IndexOf(byte[] haystack, byte[] needle)
+        {
+            for (int i = 0; i <= haystack.Length - needle.Length; i++)
+            {
+                bool found = true;
+                for (int j = 0; j < needle.Length; j++)
+                    if (haystack[i + j] != needle[j]) { found = false; break; }
+                if (found) return i;
+            }
+            return -1;
+        }
+
+        // ── Utility ───────────────────────────────────────────────────────────
 
         private static CompileResult Fail(string msg) =>
             new CompileResult { Success = false, ErrorMessage = msg };
