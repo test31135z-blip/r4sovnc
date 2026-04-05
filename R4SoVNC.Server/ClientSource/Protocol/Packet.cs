@@ -1,0 +1,85 @@
+using System;
+using System.IO;
+using System.Text;
+
+namespace R4SoVNC.ClientEmbed.Protocol
+{
+    internal enum PacketType : byte
+    {
+        Heartbeat          = 0x01,
+        ScreenData         = 0x02,
+        MouseMove          = 0x03,
+        MouseClick         = 0x04,
+        MouseScroll        = 0x05,
+        KeyDown            = 0x06,
+        KeyUp              = 0x07,
+        FileListRequest    = 0x08,
+        FileListResponse   = 0x09,
+        FileUploadRequest  = 0x0A,
+        FileUploadData     = 0x0B,
+        FileUploadComplete = 0x0C,
+        FileDownloadReq    = 0x0D,
+        FileDownloadData   = 0x0E,
+        FileDownloadDone   = 0x0F,
+        ClientInfo         = 0x10,
+        Disconnect         = 0x11,
+        MicStart           = 0x12,
+        MicStop            = 0x13,
+        AudioData          = 0x14,
+        CamStart           = 0x15,
+        CamStop            = 0x16,
+        CameraFrame        = 0x17,
+        ShellCommand       = 0x18,
+        ShellOutput        = 0x19,
+        ShellStart         = 0x1A,
+        ShellStop          = 0x1B,
+    }
+
+    internal class Packet
+    {
+        public PacketType Type { get; }
+        public byte[]     Data { get; }
+
+        public Packet(PacketType type, byte[] data) { Type = type; Data = data; }
+        public Packet(PacketType type, string text)  { Type = type; Data = Encoding.UTF8.GetBytes(text); }
+        public Packet(PacketType type)               { Type = type; Data = Array.Empty<byte>(); }
+
+        public string GetDataAsString() => Encoding.UTF8.GetString(Data);
+
+        public byte[] Serialize()
+        {
+            using var ms = new MemoryStream();
+            using var bw = new BinaryWriter(ms);
+            bw.Write(Data.Length + 1);
+            bw.Write((byte)Type);
+            bw.Write(Data);
+            return ms.ToArray();
+        }
+
+        public static Packet? Deserialize(NetworkStream stream)
+        {
+            byte[] hdr = new byte[4];
+            if (!ReadExact(stream, hdr, 4)) return null;
+            int length = BitConverter.ToInt32(hdr, 0);
+            if (length <= 0 || length > 15_000_000) return null;
+            byte[] body = new byte[length];
+            if (!ReadExact(stream, body, length)) return null;
+            var type = (PacketType)body[0];
+            byte[] data = new byte[length - 1];
+            Array.Copy(body, 1, data, 0, data.Length);
+            return new Packet(type, data);
+        }
+
+        private static bool ReadExact(System.IO.Stream s, byte[] buf, int count)
+        {
+            int read = 0;
+            while (read < count)
+            {
+                int r = s.Read(buf, read, count - read);
+                if (r == 0) return false;
+                read += r;
+            }
+            return true;
+        }
+    }
+}

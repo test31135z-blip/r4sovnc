@@ -9,8 +9,22 @@
     <Platforms>AnyCPU;x64</Platforms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!-- Client source files live here but must NOT be compiled into the server -->
+  <ItemGroup>
+    <Compile Remove="ClientSource\**" />
+  </ItemGroup>
+
+  <!-- Copy all ClientSource .cs files to the output directory so the builder can use them -->
+  <ItemGroup>
+    <None Include="ClientSource\**\*.cs">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>ClientSource\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="NAudio"          Version="2.2.1" />
   </ItemGroup>
 </Project>
