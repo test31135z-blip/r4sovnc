@@ -11,24 +11,25 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Server runtime deps -->
-    <PackageReference Include="Newtonsoft.Json"  Version="13.0.3" />
-    <PackageReference Include="NAudio"            Version="2.2.1"  />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="NAudio"          Version="2.2.1"  />
 
-    <!-- Client deps — bundled into server output so Roslyn can reference them -->
-    <PackageReference Include="AForge.Video"             Version="2.2.5" />
-    <PackageReference Include="AForge.Video.DirectShow"  Version="2.2.5" />
+    <!-- AForge bundled here so its DLLs land in the server output dir
+         and ClientCompiler can reference them when building the client -->
+    <PackageReference Include="AForge.Video"            Version="2.2.5" />
+    <PackageReference Include="AForge.Video.DirectShow" Version="2.2.5" />
 
-    <!-- In-process C# compiler — no .NET SDK required on end-user machine -->
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <!-- Bundles roslyn/csc.exe into the output folder.
+         CodeDOM picks it up automatically — no SDK needed on the build machine. -->
+    <PackageReference Include="Microsoft.CodeDom.Providers.DotNetCompilerPlatform" Version="4.1.0" />
   </ItemGroup>
 
-  <!-- ClientSource .cs files live here but are NOT compiled into the server -->
+  <!-- ClientSource .cs files are NOT compiled into the server -->
   <ItemGroup>
     <Compile Remove="ClientSource\**" />
   </ItemGroup>
 
-  <!-- Copy ClientSource to the output directory so ClientCompiler can find them -->
+  <!-- Copy ClientSource to the output dir so ClientCompiler can compile them -->
   <ItemGroup>
     <None Include="ClientSource\**\*.cs">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
